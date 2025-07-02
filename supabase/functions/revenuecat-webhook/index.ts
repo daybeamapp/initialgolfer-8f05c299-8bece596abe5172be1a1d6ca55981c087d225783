@@ -1,63 +1,51 @@
 // supabase/functions/revenuecat-webhook/index.ts
 //
-// RevenueCat webhook handler for subscription lifecycle events
-// Maintains permission state integrity across subscription transitions
+// Industry Standard RevenueCat Webhook Handler
+// Implements Authorization header authentication aligned with RevenueCat best practices
+// Processes both SANDBOX and PRODUCTION environments for comprehensive testing
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.31.0';
-import * as crypto from "https://deno.land/std@0.168.0/crypto/mod.ts";
 
-/**
- * Event types processed by this webhook handler
- * Each type triggers specific permission state transitions
- */
+// Define payload type for request validation
+interface RequestPayload {
+  api_version: string;
+  event: {
+    type: string;
+    id: string;
+    app_user_id: string;
+    original_app_user_id: string;
+    product_id: string;
+    entitlement_ids: string[];
+    environment: string;
+    expiration_at_ms: number | null;
+    transaction_id: string;
+    store: string;
+  };
+}
+
+// Event types processed by this webhook handler
 enum EventType {
   INITIAL_PURCHASE = "INITIAL_PURCHASE",
-  RENEWAL = "RENEWAL",
+  RENEWAL = "RENEWAL", 
   CANCELLATION = "CANCELLATION",
   EXPIRATION = "EXPIRATION",
   PRODUCT_CHANGE = "PRODUCT_CHANGE",
   BILLING_ISSUE = "BILLING_ISSUE",
-  SUBSCRIBER_ALIAS = "SUBSCRIBER_ALIAS"
+  NON_RENEWING_PURCHASE = "NON_RENEWING_PURCHASE"
 }
 
 /**
- * Webhook event payload structure from RevenueCat
- * https://www.revenuecat.com/docs/webhooks
- */
-interface WebhookEvent {
-  event: {
-    type: EventType;
-    id: string;
-    subscriber_id: string;
-    app_id: string;
-    original_app_user_id: string;
-    product_id: string;
-    entitlement_id: string;
-    created_at_ms: number;
-    expiration_at_ms: number | null;
-    store: string;
-    environment: string;
-    transaction_id: string;
-  };
-}
-
-/**
- * Verification result from signature validation
- */
-interface VerificationResult {
-  isValid: boolean;
-  error?: string;
-}
-
-/**
- * Core request handler for RevenueCat webhooks
+ * Industry Standard RevenueCat Webhook Handler
  * 
- * Processes subscription lifecycle events from RevenueCat and
- * maintains corresponding permission state in our database.
+ * Implements RevenueCat's recommended Authorization header authentication
+ * approach with comprehensive event processing for subscription lifecycle management.
  * 
- * Implements robust error handling, idempotent processing, and
- * comprehensive event type handling with appropriate state transitions.
+ * Architecture Features:
+ * - Simple Authorization header validation (industry standard)
+ * - Both SANDBOX and PRODUCTION event processing
+ * - Comprehensive error handling and retry resilience
+ * - Idempotent permission management
  */
 serve(async (req) => {
   // CORS handling for preflight requests
@@ -67,7 +55,7 @@ serve(async (req) => {
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-RevenueCat-Signature"
+        "Access-Control-Allow-Headers": "Content-Type, Authorization"
       }
     });
   }
@@ -81,81 +69,91 @@ serve(async (req) => {
   }
 
   try {
-    console.log("RevenueCat webhook received");
+    console.log("RevenueCat webhook received - processing with industry standard authentication");
     
-    // Get webhook secret from environment
-    const WEBHOOK_SECRET = Deno.env.get("REVENUECAT_WEBHOOK_SECRET");
-    if (!WEBHOOK_SECRET) {
-      throw new Error("Webhook secret not configured");
+    // Industry Standard Authorization Header Validation
+    const authHeader = req.headers.get("Authorization");
+    const EXPECTED_AUTH = Deno.env.get("REVENUECAT_AUTH_HEADER");
+    
+    if (!EXPECTED_AUTH) {
+      console.error("REVENUECAT_AUTH_HEADER environment variable not configured");
+      return new Response(
+        JSON.stringify({ error: "Server configuration error" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
     }
+    
+    if (!authHeader || authHeader !== EXPECTED_AUTH) {
+      console.error("Authorization validation failed:", {
+        received: authHeader ? "***REDACTED***" : "null",
+        expected: "***CONFIGURED***"
+      });
+      return new Response(
+        JSON.stringify({ error: "Unauthorized" }),
+        { status: 401, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    
+    console.log("✓ Authorization validated successfully");
     
     // Create Supabase client with admin access for permission management
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    // Get request body as text for signature verification
-    const body = await req.text();
-    
-    // Verify webhook signature
-    const signature = req.headers.get("X-RevenueCat-Signature");
-    const verification = await verifySignature(body, signature, WEBHOOK_SECRET);
-    
-    if (!verification.isValid) {
-      console.error("Signature verification failed:", verification.error);
-      return new Response(
-        JSON.stringify({ error: "Invalid signature" }),
-        { status: 401, headers: { "Content-Type": "application/json" } }
-      );
-    }
-    
     // Parse event payload
-    const event: WebhookEvent = JSON.parse(body);
-    console.log("Event type:", event.event.type);
+    const eventPayload: RequestPayload = await req.json();
+    const eventData = eventPayload.event;
     
-    // Process based on event type
-    const eventData = event.event;
+    console.log(`Processing ${eventData.environment} event:`, {
+      type: eventData.type,
+      user_id: eventData.original_app_user_id,
+      product_id: eventData.product_id,
+      environment: eventData.environment
+    });
+    
+    // Extract core event information
     const userId = eventData.original_app_user_id;
-    const entitlementId = eventData.entitlement_id;
+    const eventType = eventData.type as EventType;
+    const productId = eventData.product_id;
+    const environment = eventData.environment;
+    const expirationMs = eventData.expiration_at_ms;
+    const transactionId = eventData.transaction_id;
+    const store = eventData.store.toLowerCase();
     
-    // Skip processing for non-production environments if needed
-    if (eventData.environment !== "PRODUCTION") {
-      console.log("Skipping non-production event:", eventData.environment);
-      return new Response(
-        JSON.stringify({ status: "skipped", reason: "non-production environment" }),
-        { headers: { "Content-Type": "application/json" } }
-      );
-    }
-
+    // Determine entitlement ID - use first entitlement or derive from product
+    const entitlementId = eventData.entitlement_ids?.[0] || "product_a";
+    
     // Process event based on type
-    switch (eventData.type) {
+    switch (eventType) {
       case EventType.INITIAL_PURCHASE:
       case EventType.RENEWAL:
-        // New subscription or renewal - update permission with new expiry date
+      case EventType.NON_RENEWING_PURCHASE:
+        // New subscription or renewal - activate permission
         await handleSubscriptionActivation(
           supabase,
           userId,
           entitlementId,
-          eventData.product_id,
-          eventData.store.toLowerCase(),
-          new Date(eventData.expiration_at_ms || 0),
-          eventData.transaction_id
+          productId,
+          store,
+          expirationMs ? new Date(expirationMs) : null,
+          transactionId,
+          environment
         );
         break;
         
       case EventType.CANCELLATION:
-        // User cancelled but still has access until expiration
-        // Mark as cancelled in metadata but maintain access
+        // User cancelled but maintains access until expiration
         await handleSubscriptionCancellation(
           supabase,
           userId,
           entitlementId,
-          new Date(eventData.expiration_at_ms || 0)
+          expirationMs ? new Date(expirationMs) : null
         );
         break;
         
       case EventType.EXPIRATION:
-        // Access has expired - disable the permission
+        // Access has expired - disable permission
         await handleSubscriptionExpiration(
           supabase,
           userId,
@@ -164,21 +162,21 @@ serve(async (req) => {
         break;
         
       case EventType.PRODUCT_CHANGE:
-        // User changed subscription tier - update with new expiry and product info
+        // User changed subscription tier - update with new details
         await handleSubscriptionActivation(
           supabase,
           userId,
           entitlementId,
-          eventData.product_id,
-          eventData.store.toLowerCase(),
-          new Date(eventData.expiration_at_ms || 0),
-          eventData.transaction_id
+          productId,
+          store,
+          expirationMs ? new Date(expirationMs) : null,
+          transactionId,
+          environment
         );
         break;
         
       case EventType.BILLING_ISSUE:
-        // Payment failed - flag in metadata but don't immediately revoke access
-        // RevenueCat will send EXPIRATION when grace period ends
+        // Payment failed - flag but maintain access during grace period
         await handleBillingIssue(
           supabase,
           userId,
@@ -187,20 +185,23 @@ serve(async (req) => {
         break;
         
       default:
-        console.log("Unhandled event type:", eventData.type);
+        console.log("Unhandled event type:", eventType);
+        // Return success for unknown events to prevent retry loops
     }
     
     // Return success response
     return new Response(
       JSON.stringify({ 
         status: "processed",
-        event_type: eventData.type
+        event_type: eventType,
+        environment: environment,
+        user_id: userId
       }),
       { headers: { "Content-Type": "application/json" } }
     );
     
   } catch (error) {
-    console.error("Error processing webhook:", error);
+    console.error("Error processing RevenueCat webhook:", error);
     
     return new Response(
       JSON.stringify({ 
@@ -213,70 +214,19 @@ serve(async (req) => {
 });
 
 /**
- * Verify webhook signature to ensure request authenticity
+ * Handle subscription activation events (purchases, renewals, upgrades)
  * 
- * Uses HMAC SHA-256 to validate the request came from RevenueCat
+ * Creates or updates permission records with subscription details and expiration dates.
+ * Implements idempotent processing to handle duplicate webhook deliveries gracefully.
  * 
- * @param body - Raw request body
- * @param signature - X-RevenueCat-Signature header value
- * @param secret - Webhook secret from RevenueCat dashboard
- * @returns Verification result with validity status
- */
-async function verifySignature(
-  body: string,
-  signature: string | null,
-  secret: string
-): Promise<VerificationResult> {
-  if (!signature) {
-    return { isValid: false, error: "Missing signature header" };
-  }
-  
-  try {
-    // Convert secret to key
-    const encoder = new TextEncoder();
-    const keyData = encoder.encode(secret);
-    const key = await crypto.subtle.importKey(
-      "raw",
-      keyData,
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign", "verify"]
-    );
-    
-    // Calculate expected signature
-    const bodyData = encoder.encode(body);
-    const signatureData = await crypto.subtle.sign(
-      "HMAC",
-      key,
-      bodyData
-    );
-    
-    // Convert to hex string for comparison
-    const signatureHex = Array.from(new Uint8Array(signatureData))
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
-    
-    // Compare with provided signature
-    return { isValid: signature === signatureHex };
-    
-  } catch (error) {
-    console.error("Signature verification error:", error);
-    return { isValid: false, error: "Signature verification failed" };
-  }
-}
-
-/**
- * Handle subscription activation events (initial purchase or renewal)
- * 
- * Updates permission record with subscription details and new expiry date
- * 
- * @param supabase - Supabase client
- * @param userId - User's profile ID
- * @param entitlementId - Entitlement identifier (maps to permission_id)
+ * @param supabase - Supabase client with admin permissions
+ * @param userId - User's profile ID (original_app_user_id)
+ * @param entitlementId - Entitlement identifier (maps to permission_id) 
  * @param productId - Platform-specific product identifier
- * @param platform - 'app_store' or 'play_store'
- * @param expiresAt - Subscription expiration date
+ * @param platform - Store platform ('app_store' or 'play_store')
+ * @param expiresAt - Subscription expiration date (null for non-renewing)
  * @param transactionId - Store transaction identifier
+ * @param environment - SANDBOX or PRODUCTION
  */
 async function handleSubscriptionActivation(
   supabase: any,
@@ -284,28 +234,36 @@ async function handleSubscriptionActivation(
   entitlementId: string,
   productId: string,
   platform: string,
-  expiresAt: Date,
-  transactionId: string
+  expiresAt: Date | null,
+  transactionId: string,
+  environment: string
 ) {
   try {
-    console.log(`Activating subscription for user ${userId}, expires ${expiresAt.toISOString()}`);
+    const expirationString = expiresAt ? expiresAt.toISOString() : null;
+    console.log(`Activating subscription for user ${userId}:`, {
+      entitlement: entitlementId,
+      expires: expirationString,
+      environment
+    });
     
-    // Update or insert permission record
+    // Update or insert permission record with comprehensive metadata
     const { error } = await supabase
       .from('user_permissions')
       .upsert({
         profile_id: userId,
         permission_id: entitlementId,
         active: true,
-        expires_at: expiresAt.toISOString(),
+        expires_at: expirationString,
         product_id: productId,
         platform: platform,
         revenuecat_user_id: userId,
         metadata: {
           transaction_id: transactionId,
+          environment: environment,
           updated_at: new Date().toISOString(),
           status: 'active',
-          source: 'webhook'
+          source: 'revenuecat_webhook',
+          event_processed_at: new Date().toISOString()
         }
       });
     
@@ -314,7 +272,7 @@ async function handleSubscriptionActivation(
       throw error;
     }
     
-    console.log(`Subscription activated for user ${userId}`);
+    console.log(`✓ Subscription activated for user ${userId}`);
     
   } catch (error) {
     console.error("Error in handleSubscriptionActivation:", error);
@@ -325,22 +283,23 @@ async function handleSubscriptionActivation(
 /**
  * Handle subscription cancellation events
  * 
- * Updates permission metadata to reflect cancellation but maintains
- * access until the expiration date
+ * Updates permission metadata to reflect cancellation while maintaining
+ * access until the final expiration date.
  * 
- * @param supabase - Supabase client
+ * @param supabase - Supabase client with admin permissions
  * @param userId - User's profile ID
- * @param entitlementId - Entitlement identifier (maps to permission_id)
- * @param expiresAt - Final expiration date after which access is removed
+ * @param entitlementId - Entitlement identifier
+ * @param expiresAt - Final expiration date when access will be removed
  */
 async function handleSubscriptionCancellation(
   supabase: any,
   userId: string,
   entitlementId: string,
-  expiresAt: Date
+  expiresAt: Date | null
 ) {
   try {
-    console.log(`Cancelling subscription for user ${userId}, expires ${expiresAt.toISOString()}`);
+    const expirationString = expiresAt ? expiresAt.toISOString() : null;
+    console.log(`Processing cancellation for user ${userId}, expires: ${expirationString}`);
     
     // Get existing record to preserve metadata
     const { data: existingPermission, error: fetchError } = await supabase
@@ -361,17 +320,20 @@ async function handleSubscriptionCancellation(
       ...existingMetadata,
       status: 'cancelled',
       cancelled_at: new Date().toISOString(),
-      source: 'webhook'
+      source: 'revenuecat_webhook'
     };
     
-    // Update permission record - keep active until expiration
+    // Update permission - maintain access until expiration
     const { error } = await supabase
       .from('user_permissions')
       .upsert({
         profile_id: userId,
         permission_id: entitlementId,
         active: true, // Still active until expiration
-        expires_at: expiresAt.toISOString(),
+        expires_at: expirationString,
+        product_id: existingPermission?.product_id,
+        platform: existingPermission?.platform,
+        revenuecat_user_id: userId,
         metadata: updatedMetadata
       });
     
@@ -380,7 +342,7 @@ async function handleSubscriptionCancellation(
       throw error;
     }
     
-    console.log(`Subscription cancellation processed for user ${userId}`);
+    console.log(`✓ Cancellation processed for user ${userId}`);
     
   } catch (error) {
     console.error("Error in handleSubscriptionCancellation:", error);
@@ -391,11 +353,11 @@ async function handleSubscriptionCancellation(
 /**
  * Handle subscription expiration events
  * 
- * Deactivates the permission record to revoke access to premium features
+ * Deactivates permission record to immediately revoke access to premium features.
  * 
- * @param supabase - Supabase client
+ * @param supabase - Supabase client with admin permissions
  * @param userId - User's profile ID
- * @param entitlementId - Entitlement identifier (maps to permission_id)
+ * @param entitlementId - Entitlement identifier
  */
 async function handleSubscriptionExpiration(
   supabase: any,
@@ -424,17 +386,20 @@ async function handleSubscriptionExpiration(
       ...existingMetadata,
       status: 'expired',
       expired_at: new Date().toISOString(),
-      source: 'webhook'
+      source: 'revenuecat_webhook'
     };
     
-    // Update permission record - deactivate permission
+    // Deactivate permission
     const { error } = await supabase
       .from('user_permissions')
       .upsert({
         profile_id: userId,
         permission_id: entitlementId,
         active: false, // No longer active
-        expires_at: existingPermission?.expires_at || null,
+        expires_at: existingPermission?.expires_at,
+        product_id: existingPermission?.product_id,
+        platform: existingPermission?.platform,
+        revenuecat_user_id: userId,
         metadata: updatedMetadata
       });
     
@@ -443,7 +408,7 @@ async function handleSubscriptionExpiration(
       throw error;
     }
     
-    console.log(`Subscription expired for user ${userId}`);
+    console.log(`✓ Subscription expired for user ${userId}`);
     
   } catch (error) {
     console.error("Error in handleSubscriptionExpiration:", error);
@@ -454,12 +419,12 @@ async function handleSubscriptionExpiration(
 /**
  * Handle billing issue events
  * 
- * Flags permission record with billing issue status but maintains
- * access during grace period
+ * Flags permission record with billing issue status while maintaining
+ * access during the grace period provided by the store.
  * 
- * @param supabase - Supabase client
+ * @param supabase - Supabase client with admin permissions
  * @param userId - User's profile ID
- * @param entitlementId - Entitlement identifier (maps to permission_id)
+ * @param entitlementId - Entitlement identifier
  */
 async function handleBillingIssue(
   supabase: any,
@@ -469,7 +434,7 @@ async function handleBillingIssue(
   try {
     console.log(`Processing billing issue for user ${userId}`);
     
-    // Get existing record to preserve metadata and expiration
+    // Get existing record to preserve details
     const { data: existingPermission, error: fetchError } = await supabase
       .from('user_permissions')
       .select('*')
@@ -487,16 +452,16 @@ async function handleBillingIssue(
       return;
     }
     
-    // Prepare updated metadata
+    // Prepare updated metadata with billing issue flag
     const existingMetadata = existingPermission.metadata || {};
     const updatedMetadata = {
       ...existingMetadata,
       billing_issue: true,
       billing_issue_detected_at: new Date().toISOString(),
-      source: 'webhook'
+      source: 'revenuecat_webhook'
     };
     
-    // Update permission record - maintain access during grace period
+    // Update permission - maintain access during grace period
     const { error } = await supabase
       .from('user_permissions')
       .upsert({
@@ -504,6 +469,9 @@ async function handleBillingIssue(
         permission_id: entitlementId,
         active: true, // Still active during grace period
         expires_at: existingPermission.expires_at,
+        product_id: existingPermission.product_id,
+        platform: existingPermission.platform,
+        revenuecat_user_id: userId,
         metadata: updatedMetadata
       });
     
@@ -512,7 +480,7 @@ async function handleBillingIssue(
       throw error;
     }
     
-    console.log(`Billing issue recorded for user ${userId}`);
+    console.log(`✓ Billing issue recorded for user ${userId}`);
     
   } catch (error) {
     console.error("Error in handleBillingIssue:", error);

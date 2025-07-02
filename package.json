@@ -38,7 +38,8 @@
     "react-native-screens": "~4.4.0",
     "react-native-svg": "15.8.0",
     "react-native-vector-icons": "*",
-    "react-native-web": "~0.19.13"
+    "react-native-web": "~0.19.13",
+    "supabase": "^2.30.4"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

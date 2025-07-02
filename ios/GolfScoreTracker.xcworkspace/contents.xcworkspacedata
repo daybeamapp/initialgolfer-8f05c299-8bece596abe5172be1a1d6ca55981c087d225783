@@ -5,6 +5,9 @@
       location = "group:GolfScoreTracker.xcodeproj">
    </FileRef>
    <FileRef
+      location = "group:GolfScoreTracker 2.xcodeproj">
+   </FileRef>
+   <FileRef
       location = "group:Pods/Pods.xcodeproj">
    </FileRef>
 </Workspace>

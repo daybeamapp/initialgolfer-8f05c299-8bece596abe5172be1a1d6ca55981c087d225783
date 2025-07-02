@@ -17,10 +17,10 @@ serve(async (req) => {
   }
 
   try {
-    console.log("Edge Function called - Golf Pro Insights Test - March 18, 2025");
+    console.log("Edge Function called - Golf Pro Insights (OpenAI) - June 4, 2025");
     
-    // Get Claude API key from environment variables
-    const CLAUDE_API_KEY = Deno.env.get("CLAUDE_API_KEY") || "";
+    // Get OpenAI API key from environment variables
+    const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") || "";
     
     // Get Supabase credentials from environment variables
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -28,8 +28,8 @@ serve(async (req) => {
     const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
     
     // Check if required API keys exist
-    if (!CLAUDE_API_KEY) {
-      throw new Error("Missing CLAUDE_API_KEY environment variable");
+    if (!OPENAI_API_KEY) {
+      throw new Error("Missing OPENAI_API_KEY environment variable");
     }
     
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -192,7 +192,7 @@ serve(async (req) => {
     
     console.log(`Retrieved data for ${allHoleData.length} holes across all rounds`);
     
-    // Process hole data for each round
+    // Process hole data for each round (keeping existing logic intact)
     const processedRounds = roundsData.map(round => {
       // Extract time data for temporal analysis
       const roundDate = new Date(round.created_at);
@@ -295,13 +295,14 @@ serve(async (req) => {
       };
     });
     
-    // *** BIFURCATION BASED ON PRODUCT PERMISSION ***
-    // Create different data objects and prompts based on product_a permission
+    // *** BUSINESS CRITICAL: DATA PREPARATION BASED ON PRODUCT PERMISSION ***
+    // Prepare data and prompts based on product_a permission
     let golfData;
     let promptContent;
     let maxTokens;
     
     if (hasProductA) {
+      // PREMIUM USERS: Full data access (all 5 rounds)
       golfData = {
         rounds: processedRounds,
         totalRounds: processedRounds.length,
@@ -310,11 +311,12 @@ serve(async (req) => {
         }
       };
     } else {
+      // FREE USERS: Limited data for conversion (1 round only)
       const limitedRounds = processedRounds.slice(0, 1);
       golfData = {
         rounds: limitedRounds,
         totalRounds: limitedRounds.length,
-        limitedData: true,
+        limitedData: true, // Flag for conversion prompts
         userProfile: {
           handicap: userHandicap
         }
@@ -325,15 +327,10 @@ serve(async (req) => {
       // PRODUCT A USERS: Full data and comprehensive analysis
       console.log("Using product_a data and prompt strategy");
       
-      // Full data for product_a users
-      golfData = {
-        rounds: processedRounds,
-        totalRounds: processedRounds.length
-      };
+      // Enhanced token allocation for OpenAI's superior capacity
+      maxTokens = null; // Significantly increased from Claude's 10,000
       
-      maxTokens = 10000; // Comprehensive response for paid product
-      
-      // Premium prompt with added rendering optimization directives
+      // Premium prompt (keeping existing content, optimized for OpenAI)
       promptContent = `You are a PGA Tour-certified golf coach with expertise in statistical analysis and golf course management. Your coaching philosophy centers on personalized improvement through data-driven insights, focusing on the 20% of changes that create 80% of improvement for each unique player. Create personalized, specific, and actionable insights focused on helping them improve. Think beyond basic analysis - create longitudinal, spatial, and sequence-based insights that demonstrate extraordinary value to help players score better, realistically score better.
 
 I'm providing granular shot-by-shot data from ${golfData.totalRounds} recent rounds from a ${userHandicap ? `${userHandicap} handicap` : 'golfer'}. Each round contains shots per hole, with timestamps, categorization by type of shot, and quality assessment (On Target/Slightly Off/Recovery Needed), with timestamps so you can see the timeline of each hole and each hole as one entity that is made up of single parts that make the total number for the whole. The data represents play across different courses. If you know any specifics about these courses or holes, use that knowledge in the assessment to improve contextual information on the rounds.
@@ -349,7 +346,7 @@ As you analyze this data, focus on these high-value dimensions:
 2. SPATIAL INTELLIGENCE:
    - Use course-specific information when available to provide contextual insights on a users hole or round performance
    - Relate performance to specific course features and challenges
-   - Consider how hole layouts might affect strategy and performance
+   - Consider how hole layouts or the geography of a course might affect strategy and performance
 
 3. TEMPORAL PATTERNS:
    - Look for time-based performance variations (early vs. late round)
@@ -373,15 +370,7 @@ TECHNICAL RENDERING SPECIFICATIONS:
   
 Optimize content formatting for our mobile UI constraints with these technical guidelines:
 
-**Bullet Lists** ✅
-- Use for scannable technique recommendations
-- Keep to 3-5 items maximum for viewport optimization
-- Precede with clear context statement
-
-**Numbered Lists** ✅
-- Ideal for sequential practice drills or procedural instructions
-- Maintain consistent grammatical structure between list items
-- Include estimated time investment when applicable
+Add an Evaluation Summary Card at the start, with a summary of the overall performance and key takeaways.
 
 **Emojis** ✅
 - Strategic placement for visual hierarchy (🏌️‍♂️ 🎯 🔄)
@@ -413,24 +402,16 @@ Please provide your insights as an array of cards in this JSON format:
   }]
 }
 
-Generate as many cards as needed to convey valuable insights. The first card should be a Summary card (At the srart, add a single sentence describing the overall personality of the most recent round as a coach would — e.g. "This was a rollercoaster round with strong birdie chances offset by two blowups." This helps the user emotionally understand what kind of round it was) and summarise the users recent rounds, trends, how they can improve. Each card after should focus on a specific aspect of the player's game. Order cards by importance using the priority field.`;
+Generate as many cards as needed to convey valuable insights. The first card should be an Evaluation Summmary card (At the start, add a single sentence describing the overall personality of the most recent round as a coach would. This helps the user emotionally understand what kind of round it was) and summarise the users recent rounds, trends, how they can improve. Always have one Training Plan showing direct quantifiable shots a user can save by practising. Each card after should focus on a specific aspect of the player's game. Order cards by importance using the priority field.`;
 
     } else {
       // NON-PRODUCT A USERS: Limited data with conversion hooks
       console.log("Using non-product_a data and prompt strategy");
       
-      // Limit data volume to reduce API costs and create conversion opportunity
-      const limitedRounds = processedRounds.slice(0, 1); 
+      // Enhanced but limited token allocation for non-premium users
+      maxTokens = 16384; // Increased from Claude's 4,000
       
-      golfData = {
-        rounds: limitedRounds,
-        totalRounds: limitedRounds.length,
-        limitedData: true
-      };
-      
-      maxTokens = 4000; // Reduced response size for non-paying users
-      
-      // Conversion-optimized prompt for non-product_a users
+      // Conversion-optimized prompt for non-product_a users (keeping existing logic)
       promptContent = `You are a professional golf coach providing basic insights to a free user. Your goal is to provide some valuable analysis while clearly demonstrating the benefits of upgrading to premium insights.
 
 I'm providing LIMITED data from just ${golfData.totalRounds} recent golf round. Premium subscribers receive analysis from 5 recent rounds for more comprehensive pattern detection.
@@ -469,71 +450,83 @@ Please provide your insights as an array of cards in this JSON format:
 Create one summary card and four premium feature cards. For the premium feature cards, use different approaches to demonstrate value and drive conversion.`;
     }
     
-    console.log("Formatted golf data for Claude - round count:", golfData.totalRounds);
+    console.log("Formatted golf data for OpenAI - round count:", golfData.totalRounds);
     
     // Complete prompt with real golf data
     const fullPrompt = `${promptContent}\n\nGolf rounds data: ${JSON.stringify(golfData)}`;
     
-    // Log the exact content being sent to Claude
-    console.log("======== SENDING DATA TO CLAUDE ========");
+    // Log the exact content being sent to OpenAI
+    console.log("======== SENDING DATA TO OPENAI ========");
     console.log(`Sending data for ${golfData.totalRounds} rounds with ${processedRounds.reduce((sum, round) => sum + (round.holeDetails?.length || 0), 0)} total holes`);
     console.log("=======================================");
     
-    // Create a simple request to Claude
-    const requestData = {
-      model: "claude-3-7-sonnet-20250219",
-      max_tokens: maxTokens, // Adjusted based on product permission
+    // *** OPENAI API CALL (replacing Claude) ***
+    const openAIRequestData = {
+      model: "gpt-4o-mini-2024-07-18", // Using GPT-4o-mini for superior rate limits and context window
+      max_tokens: maxTokens,
+      temperature: 0.7, // Balanced creativity for golf insights
+      response_format: { type: "json_object" }, // Ensure JSON response
       messages: [
+        {
+          role: "system", 
+          content: "You are a professional golf coach providing insights in JSON format. Always respond with valid JSON."
+        },
         {
           role: "user",
           content: fullPrompt
         }
-      ],
+      ]
     };
     
     // Convert to JSON string
-    const claudeRequestBody = JSON.stringify(requestData);
-    console.log("Request body prepared, length:", claudeRequestBody.length);
+    const openAIRequestBody = JSON.stringify(openAIRequestData);
+    console.log("OpenAI request body prepared, length:", openAIRequestBody.length);
     
-    // Call Claude API
-    console.log("Calling Claude API...");
-    const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+    // Call OpenAI API
+    console.log("Calling OpenAI API...");
+    const openAIResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": CLAUDE_API_KEY,
-        "anthropic-version": "2023-06-01"
+        "Authorization": `Bearer ${OPENAI_API_KEY}`
       },
-      body: claudeRequestBody
+      body: openAIRequestBody
     });
     
-    console.log("Claude API response status:", claudeResponse.status);
+    console.log("OpenAI API response status:", openAIResponse.status);
     
     // Handle error response
-    if (!claudeResponse.ok) {
-      const errorText = await claudeResponse.text();
-      console.error("Claude API error:", errorText);
-      throw new Error(`Claude API error: ${claudeResponse.status}`);
+    if (!openAIResponse.ok) {
+      const errorText = await openAIResponse.text();
+      console.error("OpenAI API error:", errorText);
+      throw new Error(`OpenAI API error: ${openAIResponse.status}`);
     }
     
     // Parse successful response
-    const claudeData = await claudeResponse.json();
-    const claudeMessage = claudeData.content[0].text;
-    console.log("Claude response:", claudeMessage);
+    const openAIData = await openAIResponse.json();
     
-    // Parse Claude's JSON response with enhanced business-logic transformation
+    // Extract message content from OpenAI response structure
+    const openAIMessage = openAIData.choices[0].message.content;
+    console.log("OpenAI response:", openAIMessage);
+    
+    // Log usage statistics (adapted from existing Claude logging)
+    console.log("OpenAI usage:", {
+      prompt_tokens: openAIData.usage?.prompt_tokens || 0,
+      completion_tokens: openAIData.usage?.completion_tokens || 0,
+      total_tokens: openAIData.usage?.total_tokens || 0,
+      finish_reason: openAIData.choices[0].finish_reason
+    });
+    
+    // Parse OpenAI's JSON response with enhanced business-logic transformation
     let insightsJSON;
     let completeInsights;
     
     try {
-      // Regex extraction remains the same - it correctly handles markdown code blocks
-      const jsonMatch = claudeMessage.match(/```json\s*([\s\S]*?)\s*```/) || 
-                         claudeMessage.match(/```\s*([\s\S]*?)\s*```/) ||
-                         [null, claudeMessage];
-      insightsJSON = JSON.parse(jsonMatch[1] || claudeMessage);
+      // Parse JSON directly from OpenAI (it should already be valid JSON due to response_format)
+      insightsJSON = JSON.parse(openAIMessage);
       console.log("Successfully parsed insights JSON");
       
-      // *** RESPONSE TRANSFORMATION BASED ON PRODUCT PERMISSION ***
+      // *** RESPONSE TRANSFORMATION BASED ON PRODUCT PERMISSION (keeping existing logic) ***
       if (hasProductA) {
         // PRODUCT A USERS: Transform for premium experience
         const tieredInsightsFormat = {
@@ -623,18 +616,18 @@ Create one summary card and four premium feature cards. For the premium feature 
       }
       
     } catch (jsonError) {
-      console.error("Failed to parse Claude's response as JSON:", jsonError);
+      console.error("Failed to parse OpenAI's response as JSON:", jsonError);
       // Fall back to returning the raw text if parsing fails
       completeInsights = { 
         error: "Failed to parse as JSON",
-        rawResponse: claudeMessage,
+        rawResponse: openAIMessage,
         analyzedRounds: roundIds,
         generatedAt: new Date().toISOString(),
         productAccess: hasProductA ? "product_a" : null
       };
     }
     
-    // Store the insights in the database
+    // Store the insights in the database (keeping existing logic)
     let storedInsightsId = null;
     try {
       console.log("Storing insights in database...");
@@ -662,7 +655,7 @@ Create one summary card and four premium feature cards. For the premium feature 
       console.error("Exception storing insights:", storageError);
     }
     
-    // Return both our message and Claude's JSON response
+    // Return both our message and OpenAI's JSON response (maintaining existing response structure)
     return new Response(
       JSON.stringify({
         message: "Golf insights generated successfully",
@@ -670,7 +663,8 @@ Create one summary card and four premium feature cards. For the premium feature 
         insightsId: storedInsightsId,        // Include the ID of the stored insights record
         analyzedRounds: roundIds,            // Include which rounds were analyzed
         timestamp: new Date().toISOString(),
-        productAccess: hasProductA ? "product_a" : null // Track product access level
+        productAccess: hasProductA ? "product_a" : null, // Track product access level
+        provider: "openai" // Track which AI provider was used
       }),
       { 
         headers: { 
@@ -686,7 +680,8 @@ Create one summary card and four premium feature cards. For the premium feature 
     return new Response(
       JSON.stringify({ 
         error: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        provider: "openai"
       }),
       { 
         status: 500, 
@@ -702,9 +697,9 @@ Create one summary card and four premium feature cards. For the premium feature 
 });
 
 /**
- * UI Variant Mapping
+ * UI Variant Mapping (keeping existing function)
  * 
- * Maps Claude's variant values to our UI system for consistent presentation
+ * Maps AI provider variant values to our UI system for consistent presentation
  */
 function mapCardVariantToUi(variant) {
   const variantMap = {
