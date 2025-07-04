@@ -130,7 +130,7 @@ const SubscriptionManagementSection = () => {
             
             <View style={styles.benefitItem}>
               <Typography variant="body" style={styles.benefitText}>
-                • GPS distance measurement to green
+                • Training plan to get you to your target handicap
               </Typography>
             </View>
           </View>
@@ -149,10 +149,108 @@ const SubscriptionManagementSection = () => {
 };
 
 /**
+ * Account Deletion Component
+ * 
+ * Provides secure account deletion functionality with confirmation flow.
+ * Positioned at bottom of profile for Apple App Store compliance.
+ */
+const AccountDeletionSection = () => {
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Handle account deletion with confirmation
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "This action cannot be undone. All your golf rounds, insights, and account data will be permanently deleted.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel"
+        },
+        {
+          text: "Delete Account",
+          style: "destructive",
+          onPress: confirmDeleteAccount
+        }
+      ]
+    );
+  };
+  
+  // Execute account deletion
+  const confirmDeleteAccount = async () => {
+    setIsDeleting(true);
+    
+    try {
+      // Call the Supabase deletion function
+      const { data, error } = await supabase.rpc('delete_current_user');
+      
+      if (error) {
+        console.error('Account deletion error:', error);
+        Alert.alert(
+          "Deletion Failed", 
+          "Unable to delete your account. Please try again or contact support.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+      
+      // Check if the function returned an error
+      if (data && !data.success) {
+        console.error('Account deletion function error:', data);
+        Alert.alert(
+          "Deletion Failed", 
+          "Unable to delete your account. Please try again or contact support.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+      
+      // Success - the user will be automatically signed out due to account deletion
+      // The AuthContext will handle navigation to AuthScreen when user becomes null
+      console.log('Account deleted successfully:', data);
+      
+    } catch (err) {
+      console.error('Account deletion exception:', err);
+      Alert.alert(
+        "Deletion Failed", 
+        "An unexpected error occurred. Please try again or contact support.",
+        [{ text: "OK" }]
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+  
+  return (
+    <Card style={styles.deletionCard}>
+      <Typography variant="subtitle" style={styles.sectionTitle}>
+        Account Deletion
+      </Typography>
+      
+      <Typography variant="body" style={styles.deletionWarning}>
+        Permanently delete your account and all associated data. This action cannot be undone.
+      </Typography>
+      
+      <Button
+        variant="outline"
+        onPress={handleDeleteAccount}
+        loading={isDeleting}
+        iconLeft="trash-outline"
+        style={styles.deleteButton}
+        textStyle={styles.deleteButtonText}
+      >
+        Delete Account
+      </Button>
+    </Card>
+  );
+};
+
+/**
  * ProfileScreen Component
  * 
  * Enhanced with target handicap functionality for personalized improvement tracking.
  * Features handicap tracking with real-time database synchronization and validation.
+ * Now includes secure account deletion functionality for App Store compliance.
  */
 export default function ProfileScreen() {
   // Access authentication context
@@ -414,6 +512,9 @@ export default function ProfileScreen() {
           {/* Subscription Management Section */}
           <SubscriptionManagementSection />
           
+          {/* Account Deletion Section - NEW ADDITION */}
+          <AccountDeletionSection />
+          
           <View style={styles.spacer} />
           
           {/* Sign Out Button */}
@@ -533,11 +634,6 @@ const styles = StyleSheet.create({
     width: "100%", 
     marginTop: theme.spacing.medium,
   },
-  statusContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: theme.spacing.medium,
-  },
   premiumBadge: {
     backgroundColor: theme.colors.primary,
     paddingHorizontal: 8,
@@ -566,5 +662,25 @@ const styles = StyleSheet.create({
   },
   upgradeButton: {
     marginTop: theme.spacing.small,
-  }
+  },
+  
+  // NEW: Account deletion styles
+  deletionCard: {
+    width: "100%", 
+    marginTop: theme.spacing.medium,
+    borderColor: "#ffebee", // Light red border for visual distinction
+    borderWidth: 1,
+  },
+  deletionWarning: {
+    marginBottom: theme.spacing.medium,
+    color: theme.colors.secondary,
+    fontStyle: 'italic',
+  },
+  deleteButton: {
+    borderColor: theme.colors.error || '#D32F2F',
+    backgroundColor: 'transparent',
+  },
+  deleteButtonText: {
+    color: theme.colors.error || '#D32F2F',
+  },
 });
