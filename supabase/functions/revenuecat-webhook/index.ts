@@ -246,6 +246,16 @@ async function handleSubscriptionActivation(
       environment
     });
     
+    // Check if this is a new subscription (not just a renewal)
+    const { data: existingPermission } = await supabase
+      .from('user_permissions')
+      .select('active, created_at')
+      .eq('profile_id', userId)
+      .eq('permission_id', entitlementId)
+      .maybeSingle();
+    
+    const isNewSubscription = !existingPermission || !existingPermission.active;
+    
     // Update or insert permission record with comprehensive metadata
     const { error } = await supabase
       .from('user_permissions')
@@ -273,6 +283,13 @@ async function handleSubscriptionActivation(
     }
     
     console.log(`✓ Subscription activated for user ${userId}`);
+    
+    // Automatically generate premium insights for new product_a purchases
+    if (entitlementId === 'product_a' && isNewSubscription) {
+      console.log(`🎯 New product_a subscription detected - triggering automatic insights generation for user ${userId}`);
+      // Call insights generation function (async, no await to avoid blocking webhook)
+      triggerPremiumInsightsGeneration(userId);
+    }
     
   } catch (error) {
     console.error("Error in handleSubscriptionActivation:", error);
@@ -485,5 +502,56 @@ async function handleBillingIssue(
   } catch (error) {
     console.error("Error in handleBillingIssue:", error);
     throw error;
+  }
+}
+
+/**
+ * Trigger automatic premium insights generation for new product_a subscribers
+ * 
+ * Calls the analyze-golf-performance edge function to generate insights immediately
+ * after a user purchases premium access. Includes proper error handling to ensure
+ * webhook processing doesn't fail if insights generation encounters issues.
+ * 
+ * @param userId - User's profile ID
+ */
+async function triggerPremiumInsightsGeneration(userId: string) {
+  try {
+    console.log(`🎯 Triggering automatic premium insights generation for user ${userId}`);
+    
+    // Get Supabase URL for edge function call
+    const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    
+    if (!SUPABASE_URL) {
+      throw new Error("SUPABASE_URL not configured");
+    }
+    
+    // Call the analyze-golf-performance edge function
+    const insightsResponse = await fetch(`${SUPABASE_URL}/functions/v1/analyze-golf-performance`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ 
+        userId: userId,
+        trigger: 'purchase_webhook' // Flag to indicate this was triggered by purchase
+      })
+    });
+    
+    if (!insightsResponse.ok) {
+      const errorText = await insightsResponse.text();
+      console.error(`Insights generation failed for user ${userId}:`, errorText);
+      // Don't throw - we don't want webhook processing to fail
+      return;
+    }
+    
+    const insightsResult = await insightsResponse.json();
+    console.log(`✅ Premium insights generated successfully for user ${userId}:`, insightsResult.insightsId);
+    
+  } catch (error) {
+    // Log error but don't throw - webhook processing should continue
+    console.error(`Error generating insights for user ${userId}:`, error);
+    console.log('Webhook processing will continue despite insights generation failure');
   }
 }

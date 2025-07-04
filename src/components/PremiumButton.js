@@ -89,8 +89,8 @@ const PremiumButton = ({
       // single-source-of-truth architecture
       Alert.alert(
         "Purchase Successful",
-        "Premium features are now available! Enjoy advanced insights and analysis.",
-        [{ text: "Great!" }]
+        "Premium features are now available! Your personalized insights are being generated and will appear shortly in the Insights tab.",
+        [{ text: "View Insights", onPress: () => navigation.navigate('Insights') }]
       );
       
       onPurchaseComplete(result);

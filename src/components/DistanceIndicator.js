@@ -247,6 +247,34 @@ const DistanceIndicator = ({
       updateStaticDistances();
     }
   }, [holeData, usingGPS, locationError, updateStaticDistances]);
+
+  // Reset distances when hole data changes to ensure fresh calculation
+  useEffect(() => {
+    console.log('DistanceIndicator: Hole data changed', {
+      distance: holeData?.distance,
+      hasPoi: !!holeData?.poi,
+      poiGreens: holeData?.poi?.greens?.length || 0
+    });
+    
+    // Clear existing distances when hole data changes
+    setCenterDistance(null);
+    setFrontDistance(null);
+    setBackDistance(null);
+    
+    // If using GPS, trigger immediate location update
+    if (usingGPS && locationSubscription) {
+      // Force a new location reading by briefly stopping and restarting
+      stopLocationTracking();
+      setTimeout(() => {
+        if (active) {
+          startLocationTracking();
+        }
+      }, 100);
+    } else {
+      // Otherwise update with static distances
+      updateStaticDistances();
+    }
+  }, [holeData?.poi, holeData?.distance]);
   
   // Handle initial permission state on mount
   useEffect(() => {
